@@ -6,5 +6,9 @@
   {
     "ParameterKey": "HostedZoneName",
     "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "SubDomain",
+    "ParameterValue": "jenkins"
   }
 ]

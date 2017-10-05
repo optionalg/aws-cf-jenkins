@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: 'A simple Jenkins-CI stack without any type of HA or backup functionality.'
+Description: 'A simple Jenkins-CI stack.'
 
 Parameters:
   KeyName:
@@ -7,11 +7,15 @@ Parameters:
     Description: 'Key pairs, nothing else.'
   HostedZoneName:
     Type: String
-    Description: 'Hosted zone to create a sub domain in without a trailing dot.'
+    Description: 'Hosted zone to create a sub domain in (without a trailing dot).'
   SubDomain:
     Type: String
     Description: 'The sub domain to be used for jenkins.'
-    Default: 'jenkins'
+  EBSDiskSpace:
+    Type: String
+    Description: 'The disk size of the root EBS volume in GB'
+    Default: 50
+
 # \Parameters
 
 Mappings:
@@ -133,6 +137,7 @@ Resources:
           initInstance:
           - installJenkins
           - installNginx
+          - installDocker
         installJenkins:
           files:
             /tmp/install-jenkins.sh:
@@ -151,7 +156,7 @@ Resources:
               mode: "000744"
           commands:
             01-installJenkins:
-              command: "bash /tmp/install-jenkins.sh"
+              command: "/tmp/install-jenkins.sh"
         installNginx:
           packages:
             apt:
@@ -193,14 +198,44 @@ Resources:
                 }
           commands:
             01-post-install-script:
-              command: "bash /tmp/obtain-certificate.sh"
+              command: "/tmp/obtain-certificate.sh"
+        installDocker:
+          files:
+            /tmp/install-docker.sh:
+              content: !Sub |
+                #!/bin/bash
+                apt-get update
+                apt-get install jq apt-transport-https ca-certificates curl software-properties-common
+
+                # Add apt repo
+                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+                add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+
+                # Install docker
+                apt-get update && apt-get install -y docker-ce
+
+                # Install docker-compose
+                version=$(curl https://api.github.com/repos/docker/compose/releases/latest | jq -r .tag_name)
+                curl -L https://github.com/docker/compose/releases/download/$version/docker-compose-`uname -s`-`uname -m` -o /usr/local/bin/docker-compose
+                chmod +x /usr/local/bin/docker-compose
+              mode: "000744"
+          commands:
+            01-post-install-script:
+              command: "/tmp/install-docker.sh"
     Properties:
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sdb"
+        Ebs:
+          VolumeSize: !Ref EBSDiskSpace
       ImageId: !FindInMap [ RegionMap, !Ref "AWS::Region", "AMI" ]
       InstanceType: t2.micro
       KeyName: !Ref KeyName
-      SubnetId: !Ref VpcSubnetPublic
       SecurityGroupIds:
       - Ref: SecurityGroupJenkins
+      SubnetId: !Ref VpcSubnetPublic
+      Tags:
+      - Key: 'Name'
+        Value: !Join ['', [!Ref "AWS::StackName", ., 'jenkins-master']]
       UserData:
         'Fn::Base64': !Sub |
           #!/bin/bash -xe
