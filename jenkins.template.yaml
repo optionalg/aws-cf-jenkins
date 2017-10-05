@@ -2,6 +2,7 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: 'A simple Jenkins-CI stack.'
 
 Parameters:
+  # Required parameters (added to the parameters.json.dist).
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: 'Key pairs, nothing else.'
@@ -11,11 +12,20 @@ Parameters:
   SubDomain:
     Type: String
     Description: 'The sub domain to be used for jenkins.'
+
+  # Optional parameters.
   EBSDiskSpace:
     Type: String
     Description: 'The disk size of the root EBS volume in GB'
     Default: 50
-
+  MasterInstanceType:
+    Type: String
+    Description: "The machine type of the Jenkins master instance."
+    Default: t2.micro
+  SlaveNodesCount:
+    Type: Number
+    Description: "The number of jenkins slave nodes (not implemented yet)."
+    Default: 0
 # \Parameters
 
 Mappings:
@@ -150,7 +160,7 @@ Resources:
                 service jenkins restart
               mode: "000744"
           commands:
-            01-installJenkins:
+            01-post-install-script:
               command: "/tmp/install-jenkins.sh"
         installNginx:
           packages:
@@ -200,7 +210,7 @@ Resources:
                 #!/bin/bash -x
 
                 apt-get update
-                apt-get install jq apt-transport-https ca-certificates curl software-properties-common
+                apt-get install -y jq apt-transport-https ca-certificates curl software-properties-common
 
                 # Add apt repo
                 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
@@ -208,6 +218,7 @@ Resources:
 
                 # Install docker
                 apt-get update && apt-get install -y docker-ce
+                usermod -aG docker jenkins
 
                 # Install docker-compose
                 version=$(curl https://api.github.com/repos/docker/compose/releases/latest | jq -r .tag_name)
