@@ -1,0 +1,220 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'A simple Jenkins-CI stack without any type of HA or backup functionality.'
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: 'Key pairs, nothing else.'
+  HostedZoneName:
+    Type: String
+    Description: 'Hosted zone to create a sub domain in without a trailing dot.'
+  SubDomain:
+    Type: String
+    Description: 'The sub domain to be used for jenkins.'
+    Default: 'jenkins'
+# \Parameters
+
+Mappings:
+  # Region to Ubuntu 17.04 Canonical image map
+  RegionMap:
+    us-east-1:
+      AMI: ami-cd0f5cb6
+    us-east-2:
+      AMI: ami-10547475
+    us-west-1:
+      AMI: ami-09d2fb69
+    us-west-2:
+      AMI: ami-6e1a0117
+    ca-central-1:
+      AMI: ami-9818a7fc
+    eu-central-1:
+      AMI: ami-1e339e71
+    eu-west-1:
+      AMI: ami-785db401
+    eu-west-2:
+      AMI: ami-996372fd
+    ap-southeast-1:
+      AMI: ami-6f198a0c
+    ap-southeast-2:
+      AMI: ami-e2021d81
+    ap-northeast-1:
+      AMI: ami-ea4eae8c
+    ap-northeast-2:
+      AMI: ami-d28a53bc
+    ap-south-1:
+      AMI: ami-099fe766
+    sa-east-1:
+      AMI: ami-10186f7c
+# \Mappings
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+      - Key: 'Name'
+        Value: !Join ['', [!Ref "AWS::StackName", '-vpc']]
+
+  # Public Subnet
+  VpcSubnetPublic:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: '10.0.0.0/24'
+      MapPublicIpOnLaunch: 'true'
+
+  VpcRouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+      - Key: 'Name'
+        Value: !Join ['-', [!Ref "AWS::StackName", 'routetable', 'public']]
+
+  VpcRoutePublicInternetTraffic:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref VpcRouteTablePublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref VpcInternetGateway
+
+  VpcSubnetPublicRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VpcRouteTablePublic
+      SubnetId: !Ref VpcSubnetPublic
+
+  VpcInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref VpcInternetGateway
+
+  SecurityGroupJenkins:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Enable all internal traffic and ssh traffic for external clients'
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8080
+        ToPort: 8080
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+
+  DnsRecordJenkinsMaster:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Join ['', [!Ref HostedZoneName, .]]
+      Name: !Join ['', [!Ref SubDomain, ., !Ref HostedZoneName, .]]
+      Type: 'A'
+      TTL: 300
+      ResourceRecords:
+      - !GetAtt JenkinsMaster.PublicIp
+
+  JenkinsMaster:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          initInstance:
+          - installJenkins
+          - installNginx
+        installJenkins:
+          files:
+            /tmp/install-jenkins.sh:
+              content: !Sub |
+                #!/bin/bash
+                set -x
+
+                # Install Jenkins from apt repo
+                wget -q -O - https://pkg.jenkins.io/debian-stable/jenkins.io.key | sudo apt-key add -
+                echo "deb https://pkg.jenkins.io/debian-stable binary/" > /etc/apt/sources.list.d/jenkins.list
+                sudo apt-get update && sudo apt-get install -y jenkins
+
+                # Change configuration and restart Jenkins.
+                echo 'JENKINS_ARGS="--webroot=/var/cache/$NAME/war --httpPort=$HTTP_PORT --httpListenAddress=127.0.0.1"' >> /etc/default/jenkins
+                service jenkins restart
+              mode: "000744"
+          commands:
+            01-installJenkins:
+              command: "bash /tmp/install-jenkins.sh"
+        installNginx:
+          packages:
+            apt:
+              nginx: []
+          files:
+            /tmp/obtain-certificate.sh:
+              content: !Sub |
+                #!/bin/bash
+                set -x
+
+                # Install certbot (letsencrypt)
+                add-apt-repository -y ppa:certbot/certbot
+                apt-get update && apt-get install -y python-certbot-nginx
+
+                # Update DH parameters
+                openssl dhparam -rand /dev/urandom -outform pem -out /etc/ssl/certs/dhparam.pem 2048
+
+                # Install certificate
+                certbot --nginx -n --agree-tos --email admin@${HostedZoneName} -d ${SubDomain}.${HostedZoneName}
+                echo '0 0 * * * /usr/bin/certbot renew --quiet' > /tmp/cronjob.txt
+                crontab /tmp/cronjob.txt
+
+                # Restart nginx
+                service nginx restart
+              mode: "000744"
+            /etc/nginx/sites-enabled/jenkins:
+              content: !Sub |
+                server {
+                  listen 80;
+                  server_name ${SubDomain}.${HostedZoneName};
+                  location / {
+                    include /etc/nginx/proxy_params;
+                    proxy_pass          http://localhost:8080;
+                    proxy_read_timeout  90s;
+                    # Fix potential "It appears that your reverse proxy set up is broken" error.
+                    proxy_redirect      http://localhost:8080 https://${SubDomain}.${HostedZoneName};
+                  }
+                  ssl_dhparam /etc/ssl/certs/dhparam.pem;
+                }
+          commands:
+            01-post-install-script:
+              command: "bash /tmp/obtain-certificate.sh"
+    Properties:
+      ImageId: !FindInMap [ RegionMap, !Ref "AWS::Region", "AMI" ]
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      SubnetId: !Ref VpcSubnetPublic
+      SecurityGroupIds:
+      - Ref: SecurityGroupJenkins
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -xe
+          export DEBIAN_FRONTEND='noninteractive'
+
+          # APT update and package installation
+          apt-get update
+          apt-get -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' upgrade
+          apt-get install -y python-setuptools
+
+          # Install cfn-init for Ubuntu
+          easy_install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+
+          ln -s $(pwd)/aws-cfn-bootstrap-latest/init/ubuntu/cfn-hup /etc/init.d/cfn-hup
+          cfn-init -v --stack ${AWS::StackName} --resource JenkinsMaster --region ${AWS::Region} -c initInstance
+
+#Outputs:
