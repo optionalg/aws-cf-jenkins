@@ -13,3 +13,8 @@ file to fit with your environment. You need a `KeyName`, a `HostedZone` name and
 2. Run the stack with `./deploy-jenkins.sh {STACK_NAME}`.
 
 After provision is successful, Jenkins-CI is reachable via `https://subdomain.hostedzonename`.
+
+To finish installation, you need the initial admin password jenkins generated during installation.
+To grab it, you have to login via ssh on the Jenkins master and run
+`sudo cat /var/lib/jenkins/secrets/initialAdminPassword`. If you know a better way to publish this
+password, tell me :-)

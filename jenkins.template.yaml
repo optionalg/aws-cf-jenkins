@@ -111,10 +111,6 @@ Resources:
         ToPort: 22
         CidrIp: 0.0.0.0/0
       - IpProtocol: tcp
-        FromPort: 8080
-        ToPort: 8080
-        CidrIp: 0.0.0.0/0
-      - IpProtocol: tcp
         FromPort: 443
         ToPort: 443
         CidrIp: 0.0.0.0/0
@@ -142,8 +138,7 @@ Resources:
           files:
             /tmp/install-jenkins.sh:
               content: !Sub |
-                #!/bin/bash
-                set -x
+                #!/bin/bash -x
 
                 # Install Jenkins from apt repo
                 wget -q -O - https://pkg.jenkins.io/debian-stable/jenkins.io.key | sudo apt-key add -
@@ -164,8 +159,7 @@ Resources:
           files:
             /tmp/obtain-certificate.sh:
               content: !Sub |
-                #!/bin/bash
-                set -x
+                #!/bin/bash -x
 
                 # Install certbot (letsencrypt)
                 add-apt-repository -y ppa:certbot/certbot
@@ -203,7 +197,8 @@ Resources:
           files:
             /tmp/install-docker.sh:
               content: !Sub |
-                #!/bin/bash
+                #!/bin/bash -x
+
                 apt-get update
                 apt-get install jq apt-transport-https ca-certificates curl software-properties-common
 
@@ -251,5 +246,11 @@ Resources:
 
           ln -s $(pwd)/aws-cfn-bootstrap-latest/init/ubuntu/cfn-hup /etc/init.d/cfn-hup
           cfn-init -v --stack ${AWS::StackName} --resource JenkinsMaster --region ${AWS::Region} -c initInstance
-
-#Outputs:
+          cfn-signal -e $? --stack ${AWS::StackName} --resource JenkinsMaster --region ${AWS::Region}
+Outputs:
+  MasterIPAddress:
+    Description: The Jenkins master IP address.
+    Value: !GetAtt JenkinsMaster.PublicIp
+  MasterHostName:
+    Description: The Jenkins master hostname.
+    Value: !Join ['.', [!Ref SubDomain, !Ref HostedZoneName]]
