@@ -514,10 +514,17 @@ Resources:
 
                 useradd -m jenkins
                 sudo -u jenkins mkdir /home/jenkins/.ssh
-                cat /mnt/efs/master.pub > /home/jenkins/.ssh/authorized_keys
+                cat /mnt/efs/master_rsa.pub > /home/jenkins/.ssh/authorized_keys
                 chown jenkins.jenkins /home/jenkins/.ssh/authorized_keys
 
-                wget -O /opt/jenkins/jenkins-cli.jar https://${JenkinsMaster.PrivateIp}/jnlpJars/jenkins-cli.jar
+                # Fetch Jenkins jars.
+                wget -O /opt/jenkins/jenkins-cli.jar --no-check-certificate https://${JenkinsMaster.PrivateIp}/jnlpJars/jenkins-cli.jar
+                wget -O /opt/jenkins/slave.jar --no-check-certificate https://${JenkinsMaster.PrivateIp}/jnlpJars/slave.jar
+              mode: "000744"
+            /opt/jenkins/start-slave.sh:
+              content: !Sub |
+                #!/bin/sh
+                exec java -jar /opt/jenkins/slave.jar
               mode: "000744"
           commands:
             01-post-install-script:
